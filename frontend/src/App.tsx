@@ -1,9 +1,27 @@
 import { useState, useRef, useEffect } from 'react'
-import ChatMessage from './components/ChatMessage'
-import HeroSection from './components/HeroSection'
-import Header from './components/Header'
-import InputBar from './components/InputBar'
-import ApiKeyBanner from './components/ApiKeyBanner'
+import StudentProfile from './components/StudentProfile'
+import CoursePlanner from './components/CoursePlanner'
+import ChatPanel from './components/ChatPanel'
+import AppHeader from './components/AppHeader'
+
+export interface StudentProfile {
+  gradeLevel: 'freshman' | 'sophomore' | 'junior' | 'senior'
+  completedCourses: string[]
+  preferences: {
+    preferMorning: boolean
+    preferSmallClass: boolean
+    preferOnline: boolean
+    interestedInMinor: boolean
+    internshipFocus: boolean
+  }
+  financialAid: {
+    hasAid: boolean
+    aidType: 'none' | 'scholarship' | 'pell' | 'loan' | 'work-study' | 'multiple'
+    creditLoad: 'full' | 'part'
+  }
+  gpa: string
+  targetGradSemester: string
+}
 
 export interface Message {
   role: 'user' | 'assistant'
@@ -11,130 +29,116 @@ export interface Message {
   isStreaming?: boolean
 }
 
+export type ActivePanel = 'planner' | 'chat'
+
 function App() {
+  const [profile, setProfile] = useState<StudentProfile>({
+    gradeLevel: 'freshman',
+    completedCourses: [],
+    preferences: {
+      preferMorning: false,
+      preferSmallClass: false,
+      preferOnline: false,
+      interestedInMinor: false,
+      internshipFocus: false,
+    },
+    financialAid: {
+      hasAid: false,
+      aidType: 'none',
+      creditLoad: 'full',
+    },
+    gpa: '',
+    targetGradSemester: '',
+  })
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [isTyping, setIsTyping] = useState(false)
-  const [apiKeyMissing, setApiKeyMissing] = useState(false)
-  const [chatStarted, setChatStarted] = useState(false)
+  const [activePanel, setActivePanel] = useState<ActivePanel>('planner')
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const chatContainerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    // Check if API key is configured
-    fetch('/api/health')
-      .then(r => r.json())
-      .then(data => {
-        if (!data.apiKeyConfigured) {
-          setApiKeyMissing(true)
-        }
-      })
-      .catch(() => {})
-  }, [])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isTyping])
 
+  const buildSystemContext = () => {
+    const completed = profile.completedCourses.length > 0
+      ? `Completed courses: ${profile.completedCourses.join(', ')}.`
+      : 'No courses completed yet.'
+    const prefs = []
+    if (profile.preferences.preferMorning) prefs.push('prefers morning classes')
+    if (profile.preferences.preferSmallClass) prefs.push('prefers small classes')
+    if (profile.preferences.preferOnline) prefs.push('open to online')
+    if (profile.preferences.interestedInMinor) prefs.push('interested in a minor')
+    if (profile.preferences.internshipFocus) prefs.push('internship/co-op focused')
+    const aid = profile.financialAid.hasAid
+      ? `Financial aid: ${profile.financialAid.aidType}, ${profile.financialAid.creditLoad}-time enrollment.`
+      : 'No financial aid.'
+    return `Student context: ${profile.gradeLevel}, GPA: ${profile.gpa || 'unknown'}. ${completed} Preferences: ${prefs.join(', ') || 'none specified'}. ${aid} Target graduation: ${profile.targetGradSemester || 'undecided'}.`
+  }
+
   const sendMessage = async (text: string) => {
     if (!text.trim() || isStreaming) return
-
     const userMessage: Message = { role: 'user', content: text }
     const newMessages = [...messages, userMessage]
     setMessages(newMessages)
     setInput('')
-    setChatStarted(true)
     setIsStreaming(true)
     setIsTyping(true)
-
     const assistantMessage: Message = { role: 'assistant', content: '', isStreaming: true }
     setMessages(prev => [...prev, assistantMessage])
-
     try {
+      const systemContext = buildSystemContext()
+      const contextMessage: Message = {
+        role: 'user',
+        content: `[Student Profile] ${systemContext}`
+      }
+      const apiMessages = messages.length === 0
+        ? [contextMessage, userMessage]
+        : newMessages
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: newMessages.map(m => ({ role: m.role, content: m.content }))
-        })
+        body: JSON.stringify({ messages: apiMessages.map(m => ({ role: m.role, content: m.content })) })
       })
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch response')
-      }
-
+      if (!response.ok) throw new Error('Failed to fetch response')
       const reader = response.body?.getReader()
       const decoder = new TextDecoder()
       let fullText = ''
       let firstToken = true
-
       while (reader) {
         const { done, value } = await reader.read()
         if (done) break
-
         const chunk = decoder.decode(value)
         const lines = chunk.split('\n')
-
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             const data = line.slice(6)
-            if (data === '[DONE]') {
-              break
-            }
+            if (data === '[DONE]') break
             try {
               const parsed = JSON.parse(data)
               if (parsed.type === 'text') {
-                if (firstToken) {
-                  setIsTyping(false)
-                  firstToken = false
-                }
+                if (firstToken) { setIsTyping(false); firstToken = false }
                 fullText += parsed.text
                 setMessages(prev => {
                   const updated = [...prev]
-                  updated[updated.length - 1] = {
-                    role: 'assistant',
-                    content: fullText,
-                    isStreaming: true
-                  }
-                  return updated
-                })
-              } else if (parsed.type === 'error') {
-                fullText = 'Sorry, I encountered an error. Please try again.'
-                setMessages(prev => {
-                  const updated = [...prev]
-                  updated[updated.length - 1] = {
-                    role: 'assistant',
-                    content: fullText,
-                    isStreaming: false
-                  }
+                  updated[updated.length - 1] = { role: 'assistant', content: fullText, isStreaming: true }
                   return updated
                 })
               }
-            } catch (e) {
-              // ignore parse errors
-            }
+            } catch (e) {}
           }
         }
       }
-
       setMessages(prev => {
         const updated = [...prev]
-        updated[updated.length - 1] = {
-          role: 'assistant',
-          content: fullText,
-          isStreaming: false
-        }
+        updated[updated.length - 1] = { role: 'assistant', content: fullText, isStreaming: false }
         return updated
       })
     } catch (error) {
       setMessages(prev => {
         const updated = [...prev]
-        updated[updated.length - 1] = {
-          role: 'assistant',
-          content: 'Sorry, I encountered an error connecting to the server. Please try again.',
-          isStreaming: false
-        }
+        updated[updated.length - 1] = { role: 'assistant', content: 'Connection error. Please try again.', isStreaming: false }
         return updated
       })
     } finally {
@@ -143,97 +147,49 @@ function App() {
     }
   }
 
-  const handleSuggestedQuestion = (question: string) => {
-    sendMessage(question)
+  const handleAskAdvisor = (question: string) => {
+    setActivePanel('chat')
+    setTimeout(() => sendMessage(question), 100)
   }
 
   return (
-    <div className="relative w-full h-screen overflow-hidden bg-[#050A14]">
-      {/* Animated gradient blobs */}
-      <div className="absolute inset-0 overflow-hidden">
-        <div
-          className="absolute w-[600px] h-[600px] rounded-full opacity-20 animate-blob"
-          style={{
-            background: 'radial-gradient(circle, #003087 0%, transparent 70%)',
-            top: '-100px',
-            left: '-100px',
-          }}
-        />
-        <div
-          className="absolute w-[500px] h-[500px] rounded-full opacity-15 animate-blob-delay-2"
-          style={{
-            background: 'radial-gradient(circle, #0066CC 0%, transparent 70%)',
-            top: '30%',
-            right: '-50px',
-          }}
-        />
-        <div
-          className="absolute w-[700px] h-[700px] rounded-full opacity-10 animate-blob-delay-4"
-          style={{
-            background: 'radial-gradient(circle, #00843D 0%, transparent 70%)',
-            bottom: '-200px',
-            left: '20%',
-          }}
-        />
+    <div className="flex flex-col h-screen bg-[#080D1A] text-white overflow-hidden">
+      {/* Background gradient blobs */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute w-[800px] h-[800px] rounded-full opacity-[0.06]"
+          style={{ background: 'radial-gradient(circle, #1a3a7a 0%, transparent 70%)', top: '-200px', left: '-200px' }} />
+        <div className="absolute w-[600px] h-[600px] rounded-full opacity-[0.05]"
+          style={{ background: 'radial-gradient(circle, #C9A84C 0%, transparent 70%)', bottom: '-100px', right: '-100px' }} />
+        <div className="absolute w-[500px] h-[500px] rounded-full opacity-[0.04]"
+          style={{ background: 'radial-gradient(circle, #004d1f 0%, transparent 70%)', top: '40%', left: '35%' }} />
       </div>
 
-      {/* Main container */}
-      <div className="relative z-10 flex items-center justify-center h-full p-4">
-        <div
-          className="w-full max-w-3xl h-full flex flex-col rounded-2xl overflow-hidden"
-          style={{
-            background: 'rgba(10, 15, 30, 0.75)',
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-            boxShadow: '0 0 60px rgba(0, 48, 135, 0.3)',
-          }}
-        >
-          {/* API Key Banner */}
-          {apiKeyMissing && <ApiKeyBanner />}
+      {/* Header */}
+      <AppHeader activePanel={activePanel} onPanelChange={setActivePanel} />
 
-          {/* Header */}
-          <Header />
+      {/* Main Layout */}
+      <div className="flex flex-1 overflow-hidden relative z-10">
+        {/* Left: Student Profile */}
+        <div className="w-72 flex-shrink-0 border-r border-white/[0.06] overflow-y-auto">
+          <StudentProfile profile={profile} onProfileChange={setProfile} />
+        </div>
 
-          {/* Main content area */}
-          <div ref={chatContainerRef} className="flex-1 overflow-y-auto px-4 py-4">
-            {/* Hero section - shown only before first message */}
-            {!chatStarted && (
-              <HeroSection onSuggestedQuestion={handleSuggestedQuestion} />
-            )}
-
-            {/* Chat messages */}
-            {chatStarted && (
-              <div className="space-y-4">
-                {messages.map((msg, idx) => (
-                  <ChatMessage
-                    key={idx}
-                    message={msg}
-                    isLast={idx === messages.length - 1}
-                    isTyping={isTyping && idx === messages.length - 1 && msg.role === 'assistant'}
-                  />
-                ))}
-                {isTyping && (
-                  <div className="flex items-center gap-2 px-4 py-3 w-fit">
-                    <div className="flex gap-1.5">
-                      <div className="w-2 h-2 rounded-full bg-green-400 typing-dot" />
-                      <div className="w-2 h-2 rounded-full bg-green-400 typing-dot" />
-                      <div className="w-2 h-2 rounded-full bg-green-400 typing-dot" />
-                    </div>
-                  </div>
-                )}
-                <div ref={messagesEndRef} />
-              </div>
-            )}
-          </div>
-
-          {/* Input bar */}
-          <InputBar
-            value={input}
-            onChange={setInput}
-            onSend={() => sendMessage(input)}
-            isStreaming={isStreaming}
-          />
+        {/* Center/Right: Planner or Chat */}
+        <div className="flex-1 overflow-hidden">
+          {activePanel === 'planner' ? (
+            <CoursePlanner profile={profile} onAskAdvisor={handleAskAdvisor} />
+          ) : (
+            <ChatPanel
+              messages={messages}
+              input={input}
+              isStreaming={isStreaming}
+              isTyping={isTyping}
+              onInputChange={setInput}
+              onSend={() => sendMessage(input)}
+              messagesEndRef={messagesEndRef}
+              profile={profile}
+            />
+          )}
         </div>
       </div>
     </div>
