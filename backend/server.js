@@ -64,7 +64,8 @@ CAMPUS RESOURCES:
 - Advising office: Lutgert Hall Room 3100, walk-in hours Monday–Friday 9am–4pm
 - Eagle Angel Network: student pitch competition for seed funding`;
 
-app.post('/api/chat', async (req, res) => {
+// Routes - Vercel will prepend /api via routePrefix, so we use /chat here
+app.post('/chat', async (req, res) => {
   const { messages } = req.body;
 
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -101,7 +102,7 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-app.get('/api/health', (req, res) => {
+app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     apiKeyConfigured: !!process.env.ANTHROPIC_API_KEY 
